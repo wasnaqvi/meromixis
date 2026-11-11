@@ -1,0 +1,12 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+title: "meromixis: cold traps and chemoclines in temperate sub-Neptune atmospheres"
+type: software
+version: 0.1.0
+date-released: 2026-11-12
+license: MIT
+authors:
+  - family-names: Naqvi
+    given-names: Wasi
+    affiliation: "Department of Physics and Trottier Space Institute, McGill University"
+keywords: [exoplanets, sub-Neptunes, general circulation model, cold trap, convective inhibition]

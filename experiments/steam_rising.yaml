@@ -1,0 +1,76 @@
+# The sweep behind both results.  `meromixis pcm init experiments/steam_rising.yaml runs/`
+# writes one Generic PCM run directory per entry, plus an rcm1d twin for every fid run.
+#
+# Design choices (docs/experiment_design.md):
+#   * teq is a forcing label, F = 4 sigma teq^4.  The sweep changes ONLY Fat1AU: orbit and
+#     rotation stay fixed, so thermodynamics is not confounded with rotation.  The Kepler-
+#     consistent alternative is the `rot` variant.
+#   * nodes are clustered where the 1-D models put the transition; re-centre them with
+#     `meromixis nodes` once rcm1d has run.
+#   * Z <= 300: the CH4/H2O/NH3 closure runs out of H2 near 420x solar.
+
+name: steam-rising
+cluster: {account: def-ncowan}
+
+planet:
+  name: K2-18b-like
+  radius_rearth: 2.61
+  mass_mearth: 8.63
+  rotation_period_days: 32.94
+  semi_major_axis_au: 0.1429
+
+star: {teff: 3457.0, model: blackbody}   # swap for a MUSCLES/PHOENIX spectrum (model: file) for production
+
+fiducial: {teq: 300, metallicity: 100}
+
+defaults:
+  tint: 50.0
+  nlon: 64
+  nlat: 48
+  nlev: 40
+  p_bot: 8.0e6
+  p_top: 20.0
+  water_scheme: generic
+  corrkdir: SET_ME_H2-He-H2Ovar     # open item 3: needs a Q.dat axis out to x_H2O ~ 0.35
+  bands: 38x36
+  nday: 500
+  segments: 40                      # 20,000 days; extend until docs/experiment_design.md criteria are met
+
+tiers:
+  # Gate runs come first and are cheap; see docs/experiment_design.md section 2.
+  gate:
+    runs:
+      - {tag: dry,  teq: 300, metallicity: 100, water_scheme: dry, segments: 30,
+         notes: "G2: reproduce Innes & Pierrehumbert 2022 dry dynamics"}
+      - {tag: grey, teq: 300, metallicity: 100, greybody: true, segments: 10,
+         notes: "G3: double-grey twin of the emulator"}
+
+  # Result I backbone: one metallicity, forcing resolved across the transition.
+  spine:
+    metallicity: [100]
+    teq: [250, 275, 290, 300, 310, 325, 350, 400, 500, 600]
+
+  # Result I + II: metallicity dependence, straddling q_deep = q_cri (~11-17x solar).
+  ribs:
+    metallicity: [3, 30, 300]
+    teq: [250, 275, 300, 325, 350]
+
+  # Controlled departures from the fiducial run.
+  variants:
+    runs:
+      - {tag: noinh,  teq: 300, metallicity: 100, inhibition: false, virtual_theta: false,
+         notes: "Result II control: same planet without the lid"}
+      - {tag: noinh,  teq: 275, metallicity: 100, inhibition: false, virtual_theta: false}
+      - {tag: legacy, teq: 300, metallicity: 100, water_scheme: legacy,
+         notes: "Charnay+2021-style water cycle for continuity with the literature"}
+      - {tag: clouds, teq: 300, metallicity: 100, clouds_radiative: true,
+         notes: "cloud albedo feedback on the cold trap"}
+      - {tag: clouds, teq: 275, metallicity: 100, clouds_radiative: true}
+      - {tag: massr,  teq: 300, metallicity: 100, mass_redistrib: true,
+         notes: "pressure change from condensation (Pierrehumbert & Ding 2016)"}
+      - {tag: hires,  teq: 300, metallicity: 100, nlon: 128, nlat: 96, day_step: 960,
+         notes: "resolution check, as in Charnay+2021"}
+      - {tag: lev80,  teq: 300, metallicity: 100, nlev: 80,
+         notes: "vertical resolution of the stable layer"}
+      - {tag: tint80, teq: 300, metallicity: 100, tint: 80.0,
+         notes: "internal heat controls how convective the cloud region is"}

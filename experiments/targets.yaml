@@ -1,0 +1,19 @@
+# Temperate sub-Neptunes with JWST transmission spectra, for over-plotting on the regime map.
+# teq_a03: equilibrium temperature for Bond albedo 0.3 and full redistribution (the convention
+# of the population papers).  Values marked verify: true were entered from memory or from
+# search-result snippets and MUST be checked against the discovery/characterisation papers.
+#
+# h2o / nh3 summarise what the cited analysis reports, not an independent assessment.
+targets:
+  - {name: LHS 1140 b,  teq_a03: 215, radius_rearth: 1.73, mass_mearth: 5.6,  h2o: unconstrained,
+     nh3: unconstrained, ref: "zero-albedo Teq 234 K per arXiv:2407.09009", verify: true}
+  - {name: K2-18 b,     teq_a03: 258, radius_rearth: 2.61, mass_mearth: 8.63, h2o: not detected,
+     nh3: not detected, ref: "Madhusudhan+2023; Hu+2025 arXiv:2507.12622; PNAS review arXiv:2509.19247"}
+  - {name: TOI-732 c,   teq_a03: 305, radius_rearth: 2.42, mass_mearth: 6.29, h2o: see ref,
+     nh3: see ref, ref: "arXiv:2512.15844 (305 K at the quoted albedo, 353 K at zero albedo)", verify: true}
+  - {name: TOI-1231 b,  teq_a03: 330, radius_rearth: 3.65, mass_mearth: 15.4, h2o: see ref,
+     nh3: see ref, ref: "arXiv:2607.00973", verify: true}
+  - {name: TOI-270 d,   teq_a03: 352, radius_rearth: 2.13, mass_mearth: 4.78, h2o: reported,
+     nh3: not detected, ref: "Benneke+2024; Holmberg & Madhusudhan 2024; arXiv:2509.19247", verify: true}
+  - {name: LP 791-18 c, teq_a03: 355, radius_rearth: 2.44, mass_mearth: 7.1,  h2o: see ref,
+     nh3: see ref, ref: "arXiv:2512.10876", verify: true}
