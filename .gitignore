@@ -16,3 +16,6 @@ start*.nc
 lrun*
 logs/
 .DS_Store
+
+# local copies of results write-ups; deliberately not tracked
+reports/
