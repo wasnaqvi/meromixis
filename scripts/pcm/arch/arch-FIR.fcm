@@ -1,0 +1,19 @@
+%COMPILER            mpif90
+%LINK                mpif90
+%AR                  ar
+%MAKE                make
+%FPP_FLAGS           -P -traditional
+%CPP_FLAGS           -P
+%CPP_DEF             LAPACK
+%FPP_DEF             NC_DOUBLE
+%BASE_FFLAGS         -c -fdefault-real-8 -fdefault-double-8 -ffree-line-length-none -fno-align-commons -fcray-pointer -fallow-argument-mismatch
+%PROD_FFLAGS         -O3 -fstack-arrays
+%DEV_FFLAGS          -O
+%DEBUG_FFLAGS        -ffpe-trap=invalid,zero,overflow -fbounds-check -g3 -O0 -fstack-protector-all -finit-real=snan -fbacktrace
+%C_COMPILER          mpicc
+%C_OPTIM             -O3
+%MPI_FFLAGS
+%OMP_FFLAGS          -fopenmp
+%BASE_LD             -lflexiblas
+%MPI_LD
+%OMP_LD              -fopenmp

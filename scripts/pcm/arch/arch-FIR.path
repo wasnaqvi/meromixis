@@ -1,0 +1,13 @@
+ROOT=$PWD
+
+NETCDF_INCDIR="$(nc-config --cflags) $(nf-config --fflags)"
+NETCDF_LIBDIR="$(nc-config --libs) $(nf-config --flibs)"
+NETCDF_LIB=""
+
+IOIPSL_INCDIR="-I$ROOT/../IOIPSL/inc"
+IOIPSL_LIBDIR="-L$ROOT/../IOIPSL/lib"
+IOIPSL_LIB="-lioipsl"
+
+XIOS_INCDIR="-I$ROOT/../XIOS/inc"
+XIOS_LIBDIR="-L$ROOT/../XIOS/lib"
+XIOS_LIB="-lxios -lstdc++"
