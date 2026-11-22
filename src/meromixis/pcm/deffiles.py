@@ -356,7 +356,23 @@ def render_traceur(s: RunSpec) -> str:
 
 
 def render_diagfi(s: RunSpec) -> str:
-    base = ["temp", "ps", "p", "u", "v", "w", "ASR", "OLR", "ISR", "tsurf"]
+    """Variables to write to diagfi.
+
+    "temperature", not "temp": the generic physics writes
+    ``write_output("temperature",...)`` (physiq_mod.F90) and has no "temp", so the
+    old name silently produced output files with no temperature in them.
+
+    ``vteta`` and ``RH_generic`` are written by the model itself and are exactly the
+    two fields the lid diagnosis needs: the virtual potential temperature is the
+    Ledoux criterion Leconte et al. (2024) recast in their Eq. 21, and the relative
+    humidity settles whether the layer is sub-saturated without having to infer it.
+    """
+    base = ["temperature", "teta", "vteta", "ps", "p", "u", "v", "w",
+            "ASR", "OLR", "ISR", "tsurf"]
+    if s.water_scheme == "generic":
+        base.append("RH_generic")
+    elif s.water_scheme == "legacy":
+        base.append("RH")
     return "\n".join(base + list(s.tracer_names)) + "\n"
 
 
@@ -487,7 +503,18 @@ def write_run_dir(s: RunSpec, root, account: str = "def-ncowan") -> Path:
         "planet_constants.txt": render_planet_constants(s),
         "job.slurm": render_slurm(s, account=account),
     }
-    files["rcm1d.def" if s.one_d else "run.def"] = render_rcm1d(s) if s.one_d else render_run_def(s)
+    if s.one_d:
+        files["rcm1d.def"] = render_rcm1d(s)
+        # rcm1d still reads run.def, and aborts unless run_1d is set there.
+        files["run.def"] = (
+            "# 1-D run: rcm1d reads this as well as rcm1d.def\n"
+            "run_1d=.true.\n"
+            "restart=.false.\n"
+            "INCLUDEDEF=callphys.def\n"
+            "INCLUDEDEF=rcm1d.def\n"
+        )
+    else:
+        files["run.def"] = render_run_def(s)
     for name, text in files.items():
         (d / name).write_text(text)
     m = manifest(s)

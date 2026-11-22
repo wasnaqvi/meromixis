@@ -21,7 +21,10 @@ import numpy as np
 import xarray as xr
 
 VARMAP = {
-    "T": "temp",
+    # VERIFY P4, settled by running the model at r4609: physiq_mod.F90:2822 is
+    # call write_output("temperature",...).  There is no "temp" variable, so a
+    # diagfi written with the old name simply has no temperature in it at all.
+    "T": "temperature",
     "ps": "ps",
     "p": "p",
     "q_vap": "h2o_vap",
