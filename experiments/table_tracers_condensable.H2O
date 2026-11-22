@@ -1,15 +1,15 @@
 # Row to append to datagcm/table_tracers_condensable for water as a generic
 # condensable species.  The shipped deftank table has no H2O entry, which is why
-# rcm1d dies with SIGFPE in generic_cloud_common_h.F90:191
+# rcm1d dies with SIGFPE at generic_cloud_common_h.F90:191, which is
+# `RLVTT_generic = delta_vapH/(m/1000.)` -- with no matching row m stays 0
 # (specie_parameters_table, called from initracer.F90:482): the lookup finds no
-# match, leaves delta_vapH / Tref / Pref at zero and divides by one of them.
+# match and the divide-by-zero is unavoidable.
 # This closes docs/VERIFY.md item P2.
 #
-# Columns, per the table's own header:
-#   name_traceur  delta_vapH=J/mol  Tref=K  Pref=Pa  mass=g/mol  metallicity_coeff
+# Format, per the table's own rows: name then key=value pairs.
 #
-# The values are chosen so that the PCM's constant-latent-heat Clausius-Clapeyron
-# curve, psat = Pref*exp(-dH/R*(1/T - 1/Tref)), is EXACTLY the emulator's
+# The model's own Psat_generic is psat = Pref*exp(-delta_vapH/R*(1/T - 1/Tref))
+# (generic_cloud_common_h.F90).  The values below make that EXACTLY the emulator's
 # thermo.Saturation("cc"):
 #   delta_vapH = latent_heat * M(H2O) = 2.5e6 J/kg * 0.01801528 kg/mol = 45038.2 J/mol
 #   Tref = 273.16 K, Pref = 611.657 Pa  (water triple point)
@@ -19,4 +19,4 @@
 # Wagner-Pruss/Murphy-Koop: T* moves by -3.3 K (median, max 5.4 K).
 #
 # metallicity_coeff = 0: that column only shifts psat for refractory species.
-H2O 45038.2 273.16 611.657 18.01528 0.
+H2O delta_vapH=45038.2 Tref=273.16 Pref=611.657 mass=18.01528 metallicity_coeff=0.0
