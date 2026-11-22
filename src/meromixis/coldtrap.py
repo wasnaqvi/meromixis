@@ -41,7 +41,10 @@ def water_profile(p, T, x_deep: float, sat: Saturation | None = None):
     p = np.asarray(p, float)
     order = np.argsort(-p)  # bottom first
     xs = sat.x_sat(np.asarray(T, float)[order], p[order])
-    x_sorted = np.minimum.accumulate(np.minimum(xs, x_deep))
+    # fmin, not minimum: a non-finite level (e.g. a column whose moist adiabat has
+    # walked past the water critical point at its base) must be skipped, not
+    # propagated by the running minimum into every level above it.
+    x_sorted = np.fmin.accumulate(np.fmin(xs, x_deep))
     x = np.empty_like(x_sorted)
     x[order] = x_sorted
     return x
@@ -63,6 +66,7 @@ def cold_trap_nd(p, T, x_deep, axis: int, sat: Saturation | None = None, p_min: 
     p = np.asarray(p, float)
     T = np.asarray(T, float)
     xs = np.where(p >= p_min, sat.x_sat(T, p), np.inf)
+    xs = np.where(np.isfinite(xs), xs, np.inf)  # a NaN level must not win the argmin
     idx = np.expand_dims(np.argmin(xs, axis=axis), axis)
     xs_min = np.take_along_axis(xs, idx, axis).squeeze(axis)
     x_deep = np.broadcast_to(np.asarray(x_deep, float), xs_min.shape)

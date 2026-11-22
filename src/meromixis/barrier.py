@@ -254,6 +254,88 @@ def steady_state(
     return TracerSolution(p[::-1], f[::-1], f_deep, float(loss), float(supply_max), float(p[i_f]), starved)
 
 
+def solve_selfshielded(
+    col: Column,
+    f_deep: float,
+    p_source: float,
+    mix: Mixing = Mixing(),
+    phot: Photolysis = NH3_PHOTOLYSIS,
+    n_iter: int = 4000,
+    relax: float = 0.15,
+    tol: float = 1.0e-7,
+):
+    """Numerical steady state with a *self-shielded* photolysis sink.
+
+    Solves the equation :func:`steady_state` approximates analytically:
+
+        d/dz ( K n df/dz ) = J(z) n f,
+        J(z) = eta sigma Phi_UV exp(-tau(z)),
+        tau(z) = sigma * integral_z^top n f dz',
+
+    by fixed-point iteration on J with under-relaxation.  The sink is nonlinear
+    because the gas shields itself, which is exactly the feature the sharp-front
+    solution encodes; solving it directly is therefore a like-for-like check on
+    ``steady_state``, where a sink fixed at the optically thin rate is not.
+
+    Returns ``(p, f, info)`` with p top->bottom to match
+    :class:`TracerSolution`, and ``info`` carrying the iteration diagnostics.
+    """
+    k_all = kzz_profile(col, mix)
+    sel = col.p <= p_source
+    order = np.argsort(col.z[sel])  # ascending z, i.e. bottom first
+    z, p = col.z[sel][order], col.p[sel][order]
+    n, k = col.n[sel][order], k_all[sel][order]
+    good = np.isfinite(z) & np.isfinite(n) & np.isfinite(k) & (n > 0) & (k > 0)
+    z, p, n, k = z[good], p[good], n[good], k[good]
+
+    j0 = phot.eta * phot.sigma * phot.photon_flux  # optically thin frequency, s-1
+    reachable = p <= phot.p_floor  # UV cannot get below this whatever the gas does
+    f = np.full_like(z, f_deep)
+    f[0] = f_deep
+    last = None
+    for it in range(n_iter):
+        # column of absorber above each level (trapezoid, from the top down)
+        nf = n * f
+        seg = 0.5 * (nf[1:] + nf[:-1]) * np.diff(z)
+        col_above = np.concatenate([np.cumsum(seg[::-1])[::-1], [0.0]])
+        tau = phot.sigma * col_above
+        k_loss = np.where(reachable, j0 * np.exp(-np.clip(tau, 0.0, 700.0)), 0.0)
+        f_new = solve_diffusion_loss(z, k * n, n, k_loss, f_deep)
+        f_new = np.clip(f_new, 0.0, f_deep)
+        f = (1.0 - relax) * f + relax * f_new
+        if last is not None:
+            change = float(np.max(np.abs(f - last)) / max(f_deep, 1e-300))
+            if change < tol:
+                break
+        last = f.copy()
+    nf = n * f
+    seg = 0.5 * (nf[1:] + nf[:-1]) * np.diff(z)
+    col_above = np.concatenate([np.cumsum(seg[::-1])[::-1], [0.0]])
+    tau = phot.sigma * col_above
+    k_loss = np.where(reachable, j0 * np.exp(-np.clip(tau, 0.0, 700.0)), 0.0)
+    loss = float(np.trapezoid(k_loss * n * f, z))
+    # front = deepest level at which the gas has lost half its deep value
+    below_half = np.nonzero(f <= 0.5 * f_deep)[0]
+    p_front = float(p[below_half[0]]) if below_half.size else float(p[-1])
+    info = {
+        "iterations": it + 1,
+        "converged": bool(last is not None and change < tol),
+        "max_change": float(change) if last is not None else np.nan,
+        "column_loss": loss,
+        "p_front": p_front,
+        "tau_at_front": float(tau[below_half[0]]) if below_half.size else float(tau[-1]),
+    }
+    return p[::-1], f[::-1], info
+
+
+def band_mean(p, f, p_lo: float = 1.0e2, p_hi: float = 1.0e4, floor: float = 1.0e-12) -> float:
+    """Log-mean mixing ratio between two pressures, floored (cf. TracerSolution.mean)."""
+    sel = (p >= p_lo) & (p <= p_hi)
+    if not sel.any():
+        return float("nan")
+    return float(np.exp(np.mean(np.log(np.maximum(f[sel], floor)))))
+
+
 # ---- the kill test -------------------------------------------------------------------
 
 def k_layer_crit(

@@ -67,7 +67,14 @@ def altitude(p, T, x_h2o, comp: Composition, gravity: float):
     h = scale_height(np.asarray(T)[order], np.asarray(x_h2o)[order], comp, gravity)
     lnp = np.log(p[order])
     dz = -0.5 * (h[1:] + h[:-1]) * np.diff(lnp)
-    z_sorted = np.concatenate([[0.0], np.cumsum(dz)])
+    # A non-finite layer (a column whose base is supercritical for water) must not
+    # poison the cumulative sum for every level above it, the way a plain cumsum
+    # would.  Skip its thickness and mark only that level unusable; every quantity
+    # built from z uses differences over a selected range, and those ranges exclude
+    # the offending base levels.
+    finite = np.isfinite(dz)
+    z_sorted = np.concatenate([[0.0], np.cumsum(np.where(finite, dz, 0.0))])
+    z_sorted[1:][~finite] = np.nan
     z = np.empty_like(z_sorted)
     z[order] = z_sorted
     return z

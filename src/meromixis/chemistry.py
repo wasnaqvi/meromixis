@@ -124,13 +124,24 @@ def quench(col: Column, species: str, k_deep: float | None = None) -> Quench:
     sl = slice(i, i_bot + 1)
     d = np.log(t_ch[sl]) - np.log(t_mix[sl])  # > 0: chemistry slower than mixing (quenched)
     lp = np.log(col.p[sl])
-    if d[-1] > 0:  # still quenched at the bottom
-        return Quench(species, float(col.p[-1]), float(col.T[-1]), float(x_eq[-1]), float(t_mix[-1]), False)
+    # Drop non-finite levels before searching for the crossing.  They occur when the
+    # deep moist adiabat reaches the water critical point inside the domain, and both
+    # guards below would silently fall through on NaN (every NaN comparison is False),
+    # leaving the crossing search to index an empty array.  A column that had to be
+    # truncated cannot be called converged, so in_domain is forced False.
+    good = np.isfinite(d) & np.isfinite(lp) & np.isfinite(col.T[sl]) & np.isfinite(x_eq[sl])
+    if not good.any():
+        return Quench(species, float("nan"), float("nan"), float("nan"), float("nan"), False)
+    truncated = not bool(good.all())
+    d, lp = d[good], lp[good]
+    t_sl, x_sl, tm_sl = col.T[sl][good], x_eq[sl][good], t_mix[sl][good]
+    if d[-1] > 0:  # still quenched at the deepest usable level
+        return Quench(species, float(np.exp(lp[-1])), float(t_sl[-1]), float(x_sl[-1]), float(tm_sl[-1]), False)
     if d[0] <= 0:  # chemistry fast throughout the convective zone: quench at its top
-        return Quench(species, float(col.p[i]), float(col.T[i]), float(x_eq[i]), float(t_mix[i]), True)
-    j = np.nonzero(d <= 0)[0][0]  # first (shallowest) equilibrated level
+        return Quench(species, float(np.exp(lp[0])), float(t_sl[0]), float(x_sl[0]), float(tm_sl[0]), not truncated)
+    j = int(np.nonzero(d <= 0)[0][0])  # first (shallowest) equilibrated level
     w = d[j - 1] / (d[j - 1] - d[j])
     lpq = lp[j - 1] + w * (lp[j] - lp[j - 1])
-    tq = np.interp(lpq, lp, col.T[sl])
-    xq = np.exp(np.interp(lpq, lp, np.log(x_eq[sl])))
-    return Quench(species, float(np.exp(lpq)), float(tq), float(xq), float(np.interp(lpq, lp, t_mix[sl])), True)
+    tq = np.interp(lpq, lp, t_sl)
+    xq = np.exp(np.interp(lpq, lp, np.log(x_sl)))
+    return Quench(species, float(np.exp(lpq)), float(tq), float(xq), float(np.interp(lpq, lp, tm_sl)), not truncated)

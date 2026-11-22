@@ -1,0 +1,56 @@
+# Gate runs that are executable today, in the model's double-grey mode.
+#
+# WHY GREY: the correlated-k spine of steam_rising.yaml needs an H2/He table with
+# variable water out to x_H2O ~ 0.35.  No such table is public: the LMD repository's
+# LMDZ_Jupiter_water_var stops at x_H2O = 1e-2 (Q.dat), which covers only Z < ~10x
+# solar - below the lid threshold near 12x, so it cannot address Result II at all.
+# Until a table is generated with Exo_k, the runnable configuration is graybody with
+# a "null" corrk directory, which is exactly the `grey` gate run of steam_rising.yaml.
+#
+# These runs answer the gate questions that do not need spectral radiation:
+#   G1  does the three-layer structure appear in the PCM's own column, and does the
+#       deep temperature rise when inhibition is on?   (rcm1d twins)
+#   G2  dry dynamics, as a benchmark against Innes & Pierrehumbert (2022)
+#   G3  does the lid survive resolved 3-D overturning?  This is the question that
+#       decides Result II, and it is dynamical, not radiative.
+
+name: gate-grey
+cluster: {account: def-ncowan}
+
+planet:
+  name: K2-18b-like
+  radius_rearth: 2.61
+  mass_mearth: 8.63
+  rotation_period_days: 32.94
+  semi_major_axis_au: 0.1429
+
+star: {teff: 3457.0, model: blackbody}
+
+fiducial: {teq: 265, metallicity: 100}
+
+defaults:
+  tint: 50.0
+  nlon: 64
+  nlat: 48
+  nlev: 40
+  p_bot: 8.0e6
+  p_top: 20.0
+  water_scheme: generic
+  greybody: true
+  corrkdir: null_H2He_20x25    # gaseous k set to zero; kappa_IR/kappa_VI do the work
+  bands: 20x25
+  kappa_ir: 1.0e-2             # same grey opacities as the emulator default
+  kappa_vi: 4.0e-3
+  nday: 50
+  segments: 4
+  day_step: 480
+
+tiers:
+  gate:
+    runs:
+      - {tag: g3lid, teq: 265, metallicity: 100,
+         notes: "G3: does the lid survive resolved overturning?"}
+      - {tag: g3noinh, teq: 265, metallicity: 100, inhibition: false, virtual_theta: false,
+         notes: "G3 control: same planet, inhibition off"}
+      - {tag: g2dry, teq: 265, metallicity: 100, water_scheme: dry,
+         notes: "G2: dry dynamics benchmark (Innes & Pierrehumbert 2022)"}

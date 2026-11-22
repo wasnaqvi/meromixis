@@ -179,24 +179,78 @@ def transmission_summary(ds, sat: Saturation | None = None, p_obs=(1.0e1, 1.0e3)
 
 # ---- Result II: the stable layer and its permeability -------------------------------------
 
-def inhibition_fields(ds, sat: Saturation | None = None, tol: float = 0.02) -> xr.Dataset:
+def _contiguous_from_base(mask: xr.DataArray, above_base: xr.DataArray) -> xr.DataArray:
+    """Keep only the part of ``mask`` connected upward to the cloud base.
+
+    The lid is the layer sitting on the cloud deck (Leconte et al. 2024: "a stable
+    layer forms between the level where q=q_cri and the dry troposphere below").  A
+    bare stability test would also flag the radiative stratosphere, which is stable
+    for reasons that have nothing to do with the water gradient, so we walk upward
+    from the cloud base and stop at the first level that fails.
+    """
+    a = np.asarray(mask.values, bool)
+    ab = np.asarray(above_base.values, bool)
+    nlev = a.shape[LEV_AXIS]
+    idx = np.arange(nlev).reshape((1, nlev) + (1,) * (a.ndim - 2))
+    i_base = np.argmax(ab, axis=LEV_AXIS)  # first level above cloud base, from the bottom
+    has_base = ab.any(axis=LEV_AXIS)
+    i_base_b = np.expand_dims(i_base, LEV_AXIS)
+    below = idx < i_base_b
+    run = np.cumprod(np.where(below, True, a), axis=LEV_AXIS).astype(bool)
+    out = run & ~below & np.expand_dims(has_base, LEV_AXIS)
+    return xr.DataArray(out, dims=mask.dims, coords=mask.coords)
+
+
+def inhibition_fields(ds, sat: Saturation | None = None, tol: float = 0.02,
+                      criterion: str = "moist") -> xr.Dataset:
     """Where the column is compositionally lidded.
 
-    A level is in the lid if q > q_cri(T) and it lies above the cloud base (x has dropped
-    below its deep value by more than ``tol``) or within one level of it.  Returns the
-    4-D mask and per-column top/base pressures, plus the area fraction that is lidded.
+    ``criterion`` selects the stability test:
+
+    ``"moist"`` (default)
+        q > q_cri(T) above the cloud base.  This is the test Leconte et al. (2024)
+        apply to the *actual* vapour -- "a stable layer forms between the level where
+        q=q_cri and the dry troposphere below" -- and the one the 1-D emulator uses,
+        where the rain-out profile is saturated above cloud base so actual and
+        saturation vapour coincide.
+    ``"ledoux"``
+        Ledoux N^2 > 0 including the mu gradient, kept contiguous from the cloud base.
+        Leconte et al. (2024) find the layer "can be largely subsaturated and remain
+        stable", because "the medium does not need to be saturated for the vapor
+        gradient to have a stabilizing effect"; where the layer is sub-saturated it is
+        the Ledoux criterion on the actual profile, not the moist one, that applies
+        (their Sect. 4.1: "one needs to use the Ledoux (1947) criterion instead").
+    ``"union"``
+        Either test, contiguous from the cloud base.  This is the recommended mask for
+        a GCM run, because a real layer is moist-inhibited near its saturated top and
+        Ledoux-stable through its sub-saturated interior.
+
+    All three masks are always returned (``lid_moist``, ``lid_ledoux``, ``lid_union``)
+    together with ``lid_agreement``, the area fraction on which moist and union agree,
+    so the sensitivity of any derived number to the choice is visible rather than
+    implicit.  ``lid`` and the top/base pressures follow ``criterion``.
     """
+    if criterion not in ("moist", "ledoux", "union"):
+        raise ValueError("criterion must be 'moist', 'ledoux' or 'union'")
     sat = sat or Saturation()
     comp = _comp(ds)
     x = water_mole_fraction(ds)
     qc = xr.apply_ufunc(lambda t: q_crit(t, comp, sat), ds["T"])
     above_base = x < x.isel(lev=0) * (1.0 - tol)
     near_base = above_base | above_base.shift(lev=-1, fill_value=False)
-    lid = (ds["q_vap"] > qc) & near_base
+
+    lid_moist = (ds["q_vap"] > qc) & near_base
+    lid_ledoux = _contiguous_from_base((ledoux_n2(ds) > 0) & near_base, above_base)
+    lid_union = _contiguous_from_base(lid_moist | lid_ledoux, above_base)
+    lid = {"moist": lid_moist, "ledoux": lid_ledoux, "union": lid_union}[criterion]
+
     p = ds["p"]
     out = xr.Dataset(
         {
             "lid": lid,
+            "lid_moist": lid_moist,
+            "lid_ledoux": lid_ledoux,
+            "lid_union": lid_union,
             "p_lid_base": p.where(lid).max("lev"),
             "p_lid_top": p.where(lid).min("lev"),
             "supercriticality": (ds["q_vap"].isel(lev=0) / qc.where(near_base).max("lev")).drop_vars("lev", errors="ignore"),
@@ -204,6 +258,11 @@ def inhibition_fields(ds, sat: Saturation | None = None, tol: float = 0.02) -> x
     )
     out["has_lid"] = lid.any("lev")
     out["lid_area_fraction"] = wmean(out["has_lid"].astype(float), ds)
+    for name, m in (("moist", lid_moist), ("ledoux", lid_ledoux), ("union", lid_union)):
+        out[f"lid_area_fraction_{name}"] = wmean(m.any("lev").astype(float), ds)
+    agree = (lid_moist.any("lev") == lid_union.any("lev")).astype(float)
+    out["lid_agreement"] = wmean(agree, ds)
+    out.attrs["criterion"] = criterion
     return out
 
 
@@ -269,11 +328,20 @@ def kzz_flux_gradient(ds, tracer: str = "q_vap", p_levels=None, mask: xr.DataArr
     return xr.Dataset({"kzz": k.where(~flat), "flux": flux, "dq_dz": dq_dz, "q_bar": q_bar, "rho": rho_m, "scale_height": h})
 
 
-def layer_permeability(ds, tracer: str = "q_vap") -> dict:
-    """K_eff of the resolved flow inside the lid: the number that enters the kill test."""
-    inh = inhibition_fields(ds)
+def layer_permeability(ds, tracer: str = "q_vap", criterion: str = "moist") -> dict:
+    """K_eff of the resolved flow inside the lid: the number that enters the kill test.
+
+    ``criterion`` is passed to :func:`inhibition_fields`.  The returned dict carries
+    it, and the agreement between the moist and union masks, because K_layer is
+    sensitive to how the lid is delimited: on synthetic output at 100x solar it moves
+    by a factor of ~285 between a fully saturated field and one at 20% relative
+    humidity, purely through the mask thinning out.
+    """
+    inh = inhibition_fields(ds, criterion=criterion)
     if not bool(inh["has_lid"].any()):
-        return {"has_lid": False, "kzz_layer": np.nan, "p_top": np.nan, "p_base": np.nan}
+        return {"has_lid": False, "kzz_layer": np.nan, "p_top": np.nan, "p_base": np.nan,
+                "criterion": criterion,
+                "lid_agreement": float(inh["lid_agreement"].mean())}
     p_top = float(np.exp(wmean(np.log(inh["p_lid_top"]), ds).mean("time")))
     p_base = float(np.exp(wmean(np.log(inh["p_lid_base"]), ds).mean("time")))
     plevs = np.geomspace(p_base, p_top, 9)[1:-1]
@@ -282,7 +350,11 @@ def layer_permeability(ds, tracer: str = "q_vap") -> dict:
     k_pos = k.where(k > 0)
     k_layer = float(1.0 / (1.0 / k_pos).mean()) if bool(k_pos.notnull().any()) else np.nan
     return {"has_lid": True, "kzz_layer": k_layer, "p_top": p_top, "p_base": p_base,
-            "lid_area_fraction": float(inh["lid_area_fraction"].mean())}
+            "lid_area_fraction": float(inh["lid_area_fraction"].mean()),
+            "criterion": criterion,
+            "lid_area_fraction_moist": float(inh["lid_area_fraction_moist"].mean()),
+            "lid_area_fraction_union": float(inh["lid_area_fraction_union"].mean()),
+            "lid_agreement": float(inh["lid_agreement"].mean())}
 
 
 # ---- housekeeping -------------------------------------------------------------------------
