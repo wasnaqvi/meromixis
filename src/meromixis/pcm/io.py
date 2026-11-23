@@ -27,8 +27,12 @@ VARMAP = {
     "T": "temperature",
     "ps": "ps",
     "p": "p",
-    "q_vap": "h2o_vap",
-    "q_ice": "h2o_ice",
+    # The tracer variables are named by traceur.def, and the generic PCM writes that
+    # name verbatim: "H2O_vap", not "h2o_vap".  Same class of error as "temp" above --
+    # a lower-cased guess here raises KeyError in standardize() and takes the whole
+    # 3-D pipeline with it.
+    "q_vap": "H2O_vap",
+    "q_ice": "H2O_ice",
     "u": "u",
     "v": "v",
     "w": "w",

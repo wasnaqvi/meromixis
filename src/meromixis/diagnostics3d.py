@@ -179,6 +179,28 @@ def transmission_summary(ds, sat: Saturation | None = None, p_obs=(1.0e1, 1.0e3)
 
 # ---- Result II: the stable layer and its permeability -------------------------------------
 
+def water_gradient(ds) -> xr.DataArray:
+    """``d ln q_vap / d ln p``: positive where the vapour increases downward.
+
+    This is the gate that bounds the inhibited layer from above.  A compositionally
+    stabilised layer requires a mean-molecular-weight gradient, and in this problem the
+    mu gradient *is* the water gradient.  Above the cold trap the vapour is a well-mixed
+    tracer with no sources or sinks, so ``q`` is constant, the mu gradient vanishes, and
+    nothing there is compositionally stabilised however large ``q`` happens to be.
+
+    Without this gate both stability tests run away to the model top in a steam
+    atmosphere: ``q > q_cri`` is satisfied at every level once the well-mixed vapour
+    exceeds a few percent, and the radiative stratosphere above the trap is stable on
+    its own, so ``_contiguous_from_base`` never finds a level that fails and never
+    stops.  Verified on the first 3-D runs, where an ungated mask flagged 100% of the
+    area from the cloud base to 0.24 Pa.
+    """
+    q = np.maximum(ds["q_vap"].values, 1e-300)
+    lnp = np.log(ds["p"].values)
+    g = np.gradient(np.log(q), axis=LEV_AXIS) / np.gradient(lnp, axis=LEV_AXIS)
+    return xr.DataArray(g, dims=ds["T"].dims, coords=ds["T"].coords, name="nabla_q")
+
+
 def _contiguous_from_base(mask: xr.DataArray, above_base: xr.DataArray) -> xr.DataArray:
     """Keep only the part of ``mask`` connected upward to the cloud base.
 
@@ -202,7 +224,7 @@ def _contiguous_from_base(mask: xr.DataArray, above_base: xr.DataArray) -> xr.Da
 
 
 def inhibition_fields(ds, sat: Saturation | None = None, tol: float = 0.02,
-                      criterion: str = "moist") -> xr.Dataset:
+                      criterion: str = "moist", grad_tol: float = 1.0e-3) -> xr.Dataset:
     """Where the column is compositionally lidded.
 
     ``criterion`` selects the stability test:
@@ -238,9 +260,13 @@ def inhibition_fields(ds, sat: Saturation | None = None, tol: float = 0.02,
     qc = xr.apply_ufunc(lambda t: q_crit(t, comp, sat), ds["T"])
     above_base = x < x.isel(lev=0) * (1.0 - tol)
     near_base = above_base | above_base.shift(lev=-1, fill_value=False)
+    # Bound the layer above by the cold trap: no water gradient, no compositional
+    # stabilisation.  See :func:`water_gradient` for why this is not optional.
+    gradient = (water_gradient(ds) > grad_tol) | above_base.shift(lev=-1, fill_value=False)
+    window = near_base & gradient
 
-    lid_moist = (ds["q_vap"] > qc) & near_base
-    lid_ledoux = _contiguous_from_base((ledoux_n2(ds) > 0) & near_base, above_base)
+    lid_moist = (ds["q_vap"] > qc) & window
+    lid_ledoux = _contiguous_from_base((ledoux_n2(ds) > 0) & window, above_base)
     lid_union = _contiguous_from_base(lid_moist | lid_ledoux, above_base)
     lid = {"moist": lid_moist, "ledoux": lid_ledoux, "union": lid_union}[criterion]
 
@@ -263,6 +289,7 @@ def inhibition_fields(ds, sat: Saturation | None = None, tol: float = 0.02,
     agree = (lid_moist.any("lev") == lid_union.any("lev")).astype(float)
     out["lid_agreement"] = wmean(agree, ds)
     out.attrs["criterion"] = criterion
+    out.attrs["grad_tol"] = grad_tol
     return out
 
 
