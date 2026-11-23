@@ -22,6 +22,14 @@ for f in T.dat p.dat Q.dat g.dat; do curl -sS --max-time 90 -O "$B/$f"; done
 cd "$D/20x25"
 for f in narrowbands_IR.in narrowbands_VI.in; do curl -sS --max-time 90 -O "$B/20x25/$f"; done
 
+# Dry twin for G2: same axes and bands, but a Q.dat with only the two gases of a dry
+# gases.def and no variable species (L_REFVAR = 1).  The moist table lists five gases
+# and a variable H2O, which a dry run rejects twice over (gas count, varactive).
+DD=/scratch/$USER/pcm/datagcm/corrk_data/null_H2He_dry_20x25
+mkdir -p "$DD"
+for f in T.dat p.dat g.dat 20x25; do ln -sfn "$D/$f" "$DD/$f"; done
+printf '2\nH2_\nHe_\n1\n0.0\n' > "$DD/Q.dat"
+
 echo "=== assembled ==="
 find /scratch/$USER/pcm/datagcm -type f | sed "s|/scratch/$USER/pcm/datagcm/||"
 echo

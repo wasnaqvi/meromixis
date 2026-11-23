@@ -213,7 +213,7 @@ tlocked    = .true.                 # [wiki]
 season     = .false.                # [verify]
 lwrite     = .false.                # [r4146]
 callstats  = .false.                # [r4146]
-enertest   = .true.                 # [r4146] keep on: the energy budget is a convergence monitor
+enertest   = .false.                # [r4146] on, it prints the energy budget every step: 1.6 GB per 1-D run
 diagfi_output_rate = {s.diagfi_output_rate}          # [r4146] in physics steps (= every {s.output_every_days:g} days)
 
 ## External data
@@ -407,6 +407,83 @@ def render_diagfi(s: RunSpec) -> str:
     return "\n".join(base + list(s.tracer_names)) + "\n"
 
 
+def initial_column(s: RunSpec) -> tuple[np.ndarray, np.ndarray, float, np.ndarray]:
+    """Emulator equilibrium on the model's layers: (p_layer [Pa], T_layer [K], T_bottom [K], q_vap [kg/kg]).
+
+    rcm1d's own initial state is isothermal at ``tref`` with water only in the bottom
+    layer.  An isothermal column is stable, so convection never starts and water never
+    leaves the bottom layer: after 13 000 days the G1 twins had x_H2O ~ 1e-15 above
+    10 bar and no cloud, cold trap or lid at all, and inhibition had nothing to act
+    on.  The deep column cannot spin up from there either -- its heat capacity is
+    ~5e9 J m-2 K-1 against 0.35 W m-2 of internal heat, ~500 yr per kelvin.  So the
+    column starts from the emulator's equilibrium for the same forcing, composition,
+    inhibition switch and opacity law (constant kappa in graybody mode).
+    """
+    from ..column import ColumnParams, solve_column
+    from ..composition import x_to_q
+
+    col = solve_column(ColumnParams(
+        teq=s.teq, metallicity=s.metallicity, tint=s.tint, gravity=s.planet.gravity,
+        kappa_th=s.kappa_ir, gamma_v=s.kappa_vi / s.kappa_ir,
+        kappa_pexp=0.0 if s.greybody else 1.0, inhibition=s.inhibition,
+        p_bot=max(1.0e8, 1.5 * s.p_bot),
+    ))
+    p_lay = s.p_bot * 10.0 ** (-pseudo_altitudes(s))  # sigma = exp(-z/H), H = 1/ln 10
+    lp, lpc = np.log(p_lay), np.log(col.p)
+    t_lay = np.interp(lp, lpc, col.T)
+    t_bot = float(np.interp(np.log(s.p_bot), lpc, col.T))
+    q = np.asarray(x_to_q(col.x, col.comp.mu_dry), float)
+    q_lay = np.minimum(np.interp(lp, lpc, q), s.qvap_deep) if s.qvap_deep > 0 else np.zeros_like(p_lay)
+    return p_lay, t_lay, t_bot, q_lay
+
+
+def render_profile(s: RunSpec) -> str:
+    """rcm1d ``profile`` for ichoice = 8: the bottom (surface) temperature, then one per layer."""
+    _, t, t_bot, _ = initial_column(s)
+    return "\n".join(f"{v:.4f}" for v in (t_bot, *t)) + "\n"
+
+
+def render_profile_vap(s: RunSpec) -> str:
+    """rcm1d ``profile_<tracer>``: the surface reservoir (kg m-2; none here), then q per layer."""
+    *_, q = initial_column(s)
+    return "0.0\n" + "\n".join(f"{v:.6e}" for v in q) + "\n"
+
+
+def render_newstart_input(s: RunSpec) -> str:
+    """Answers for ``newstart`` (option 0, from a start_archive.nc), one per line.
+
+    The lon-lat core cannot cold-start generic physics: with ``read_start=.false.``
+    ``iniacademic`` only fills fields when ``iflag_phys >= 2``, so a 3-D run with no
+    start.nc stops in ``dynetat0``.  Option 1 (from start/startfi) does no regridding,
+    so any seed on another grid has to go through ``start2archive`` and option 0.
+    The prompt order follows newstart.F and tabfi_mod.F90 at r4609.  The state is
+    flat, at rest, horizontally uniform at the emulator column (``profile.in`` and
+    ``profile_<vap>``, written alongside), with p_s = p_bot everywhere.
+    """
+    p = s.planet
+    rcp = 8.314463 / (s.mugaz_ref / 1.0e3) / s.cppd_ref
+    consts = [
+        ("obliquit", "0."), ("peri_day", "0."),
+        ("periastr", f"{p.semi_major_axis_au:.5f}"), ("apoastr", f"{p.semi_major_axis_au:.5f}"),
+        ("year_day", f"{p.rotation_period_days:.4f}"), ("rad", f"{p.radius:.1f}"),
+        ("omeg", f"{p.omega:.6e}"), ("g", f"{p.gravity:.4f}"),
+        ("mugaz_ref", f"{s.mugaz_ref:.4f}"), ("rcp_ref", f"{rcp:.6f}"), ("daysec", "86400."),
+    ]
+    lines = ["0",                                  # from start_archive.nc
+             "y", f"{s.p_bot:.1f}", f"{s.p_bot / 200.0:.1f}"]  # preff, pa
+    for k, v in consts:
+        lines += [k, v]
+    lines += ["",                                  # end of tab_cntrl changes
+              "none", "0.1", "1000.",              # no surface file; albedo, inertia (nosurf: unused)
+              "0"]                                 # lect_start_archive: which stored date (the seed has day 0)
+    lines += ["flat", "y", f"{s.p_bot:.1f}",       # no topography, uniform p_s
+              "t=profile", "q=0"]
+    if s.water_scheme != "dry":
+        lines += ["q=profile", "1"]                # tracer 1 is the vapour (traceur.def order)
+    lines += [""]                                  # end of changes: write restart.nc, restartfi.nc
+    return "\n".join(lines) + "\n"
+
+
 def render_rcm1d(s: RunSpec) -> str:
     return f"""# rcm1d.def generated by meromixis for run {s.run_id}  (keys from deftank/earth1d.rcm1d.def; [verify] the rest)
 daysec     = 86400.
@@ -422,7 +499,8 @@ time       = 12
 day_step   = 48
 ndt        = {s.nday * 48}
 diagfi_output_rate = {48 * 50}
-ichoice    = 1
+# 8: read T from the file "profile" (emulator equilibrium; see initial_column)
+ichoice    = 8
 tref       = {max(s.teq, 200.0) * 1.5:.1f}
 isin       = 0
 rad        = {s.planet.radius:.1f}             # [verify]
@@ -449,7 +527,9 @@ build             {s.build_command()}
 
 
 def render_slurm(s: RunSpec, account: str = "def-ncowan", walltime: str = "24:00:00", ntasks: int = 24,
-                 cpus_per_task: int = 2, exe: str = "gcm.e") -> str:
+                 cpus_per_task: int = 1, exe: str = "gcm.e") -> str:
+    # One OpenMP thread per rank: generic_cloud_common_h reads table_tracers_condensable
+    # on the fixed unit 117 from every thread, and two threads race on it.
     if s.one_d:
         run = "./rcm1d.e > lrun${next} 2>&1"
         ntasks, cpus_per_task = 1, 1
@@ -469,7 +549,7 @@ set -euo pipefail
 NUMMAX={s.segments}
 
 module load StdEnv/2023 gcc openmpi netcdf-fortran-mpi    # check with `module spider`
-export OMP_NUM_THREADS=${{SLURM_CPUS_PER_TASK:-1}}
+export OMP_NUM_THREADS=1
 export OMP_STACKSIZE=400M
 ulimit -s unlimited
 
@@ -536,6 +616,11 @@ def write_run_dir(s: RunSpec, root, account: str = "def-ncowan") -> Path:
     }
     if s.one_d:
         files["rcm1d.def"] = comments_on_own_lines(render_rcm1d(s))
+        files["profile"] = render_profile(s)
+        if s.water_scheme != "dry":
+            # rcm1d reads profile_<name> for every *_vap tracer except legacy h2o_vap,
+            # which has its own branch reading profile_h2o_vap: same file name either way.
+            files[f"profile_{s.tracer_names[0]}"] = render_profile_vap(s)
         # rcm1d still reads run.def, and aborts unless run_1d is set there.
         files["run.def"] = (
             "# 1-D run: rcm1d reads this as well as rcm1d.def\n"
@@ -546,6 +631,12 @@ def write_run_dir(s: RunSpec, root, account: str = "def-ncowan") -> Path:
         )
     else:
         files["run.def"] = comments_on_own_lines(render_run_def(s))
+        if not s.branch_from:
+            # inputs for newstart (see render_newstart_input); same file formats as rcm1d's
+            files["profile.in"] = render_profile(s)
+            files["newstart.in"] = render_newstart_input(s)
+            if s.water_scheme != "dry":
+                files[f"profile_{s.tracer_names[0]}"] = render_profile_vap(s)
     for name, text in files.items():
         (d / name).write_text(text)
     m = manifest(s)

@@ -4,9 +4,9 @@
 #SBATCH --time=3:00:00
 #SBATCH --nodes=1
 #SBATCH --ntasks=24
-#SBATCH --cpus-per-task=2
+#SBATCH --cpus-per-task=1
 #SBATCH --mem-per-cpu=2G
-#SBATCH --output=/scratch/$USER/pcm/logs/g23-%A_%a.out
+#SBATCH --output=/scratch/%u/pcm/logs/g23-%A_%a.out
 #SBATCH --array=0-2
 #
 # Gates G2 (dry dynamics) and G3 (lid survival, with its no-inhibition control),
@@ -18,13 +18,19 @@ d=/scratch/$USER/pcm/runs/${RUNS[$SLURM_ARRAY_TASK_ID]}
 source /scratch/$USER/pcm/trunk/LMDZ.COMMON/arch/arch-FIR.env
 ulimit -s unlimited
 export OMP_STACKSIZE=400M
-export OMP_NUM_THREADS=${SLURM_CPUS_PER_TASK:-1}
+# One thread per rank: specie_parameters_table (generic_cloud_common_h.F90) opens
+# table_tracers_condensable on the fixed unit 117 from every OpenMP thread, so with
+# two threads one closes the file while the other reads it ("End of file" at its
+# first read on 4 of 24 ranks).
+export OMP_NUM_THREADS=1
 
 cd "$d" || exit 1
 echo "=== $(basename $d) in $d ==="
-ln -sf /scratch/$USER/pcm/datagcm datagcm
+ln -sfn /scratch/$USER/pcm/datagcm datagcm
 ln -sf /scratch/$USER/pcm/trunk/LMDZ.COMMON/bin/gcm_64x48x40_phygeneric_b20x25_para.e gcm.e
-ls -la start.nc startfi.nc 2>/dev/null || echo "(no start files; relying on the model's own init)"
+# The lon-lat core cannot cold-start generic physics; start files come from make_starts.sh.
+ls -la start.nc startfi.nc || { echo "no start files: run make_starts.sh first"; exit 1; }
+rm -f lrun_g23 used_*.def diagfi.nc restart.nc restartfi.nc
 
 srun ./gcm.e > lrun_g23 2>&1
 echo "gcm rc=$?"

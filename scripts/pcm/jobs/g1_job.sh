@@ -6,7 +6,7 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=4
 #SBATCH --mem-per-cpu=4G
-#SBATCH --output=/scratch/$USER/pcm/logs/g1-%j.out
+#SBATCH --output=/scratch/%u/pcm/logs/g1-%j.out
 #
 # Gate G1: rebuild rcm1d (production, not -debug) and run the two column twins.
 # Runs under Slurm so an SSH disconnect cannot kill it.

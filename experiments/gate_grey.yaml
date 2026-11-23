@@ -43,7 +43,12 @@ defaults:
   kappa_vi: 4.0e-3
   nday: 50
   segments: 4
-  day_step: 480
+  # 45 s.  At 480 (180 s) the first 3-D runs blew up within steps (T = -365 K near
+  # the top): sound in H2 at ~440 K is ~1.6 km/s, ~5x Earth's, against a radius only
+  # 2.6x larger, so the stable step is about half the 90 s deftank uses at 64x48 on
+  # Earth.  It also brings dtdiss/tau (dissipation) under inidissip's 1.9 limit at
+  # the top levels, where dissip_fac_up multiplies it by 5.
+  day_step: 1920
 
 tiers:
   gate:
@@ -52,5 +57,9 @@ tiers:
          notes: "G3: does the lid survive resolved overturning?"}
       - {tag: g3noinh, teq: 265, metallicity: 100, inhibition: false, virtual_theta: false,
          notes: "G3 control: same planet, inhibition off"}
+      # Dry needs its own null table: with a plain (non-ModernTrac) traceur.def the
+      # model checks that Q.dat lists exactly the gases in gases.def (H2, He), and
+      # with varactive off it refuses a table that declares a variable species.
       - {tag: g2dry, teq: 265, metallicity: 100, water_scheme: dry,
+         corrkdir: null_H2He_dry_20x25,
          notes: "G2: dry dynamics benchmark (Innes & Pierrehumbert 2022)"}
