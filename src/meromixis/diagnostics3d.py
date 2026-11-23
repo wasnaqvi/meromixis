@@ -262,7 +262,12 @@ def inhibition_fields(ds, sat: Saturation | None = None, tol: float = 0.02,
     near_base = above_base | above_base.shift(lev=-1, fill_value=False)
     # Bound the layer above by the cold trap: no water gradient, no compositional
     # stabilisation.  See :func:`water_gradient` for why this is not optional.
-    gradient = (water_gradient(ds) > grad_tol) | above_base.shift(lev=-1, fill_value=False)
+    # The one exemption is the cloud-base level itself (the last level not yet above
+    # base, whose neighbour above is), where a one-sided gradient can read flat.
+    # ``above_base.shift(lev=-1)`` alone is true at every level below the top, which
+    # switched the gate off and let the lid run to the model top again.
+    cloud_base = ~above_base & above_base.shift(lev=-1, fill_value=False)
+    gradient = (water_gradient(ds) > grad_tol) | cloud_base
     window = near_base & gradient
 
     lid_moist = (ds["q_vap"] > qc) & window

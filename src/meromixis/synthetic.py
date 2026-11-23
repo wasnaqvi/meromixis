@@ -1,7 +1,7 @@
 """Synthetic PCM-like output, so the whole analysis chain can run before any GCM does.
 
 :func:`make_synthetic_run` writes fields with the *raw* Generic PCM names and layout
-(``Time, altitude, latitude, longitude``; ``temp, ps, aps, bps, h2o_vap, w ...``) built from
+(``Time, altitude, latitude, longitude``; ``temperature, ps, aps, bps, H2O_vap, w ...``) built from
 emulator columns with a day-night forcing contrast.  It is a plumbing test, not a model:
 winds are zero and there is no horizontal transport.
 
@@ -61,9 +61,9 @@ def make_synthetic_run(params: ColumnParams | None = None, nlon: int = 32, nlat:
     dims = ("Time", "altitude", "latitude", "longitude")
     ds = xr.Dataset(
         {
-            "temp": (dims, temp4),
-            "h2o_vap": (dims, q4),
-            "h2o_ice": (dims, np.zeros(shape)),
+            "temperature": (dims, temp4),
+            "H2O_vap": (dims, q4),
+            "H2O_ice": (dims, np.zeros(shape)),
             "u": (dims, np.zeros(shape)),
             "v": (dims, np.zeros(shape)),
             "w": (dims, rng.normal(0.0, 1e-4, shape)),

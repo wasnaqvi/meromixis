@@ -27,7 +27,7 @@ def test_standardize_layout(run, tmp_path):
     again = open_run(str(path), G, Z, last_n=2)
     assert again.sizes["time"] == 2 and np.allclose(again["T"], ds["T"].isel(time=slice(-2, None)))
     with pytest.raises(KeyError):
-        standardize(raw.drop_vars("h2o_vap"), G, Z)
+        standardize(raw.drop_vars("H2O_vap"), G, Z)
 
 
 def test_region_masks_partition_the_sphere(run):
@@ -82,6 +82,13 @@ def test_inhibition_fields_find_the_lid(run):
     assert bool((inh["p_lid_base"] >= inh["p_lid_top"]).where(inh["has_lid"], True).all())
     n2 = d3.ledoux_n2(ds)
     assert float(n2.where(inh["lid"]).mean()) > 0  # the lid is Ledoux-stable
+    # Above cloud base the lid must sit where the vapour still falls with height: in
+    # the well-mixed region above the cold trap nothing is compositionally stabilised.
+    x = d3.water_mole_fraction(ds)
+    above_base = x < x.isel(lev=0) * (1.0 - 0.02)
+    flat = d3.water_gradient(ds) <= inh.attrs["grad_tol"]
+    for name in ("lid_moist", "lid_ledoux", "lid_union"):
+        assert not bool((inh[name] & above_base & flat).any()), name
     sub = standardize(make_synthetic_run(ColumnParams(teq=230.0, metallicity=3.0, n_lev=200, n_sub=2), nlon=16, nlat=12), G, 3.0)
     assert float(d3.inhibition_fields(sub)["lid_area_fraction"].mean()) == 0.0
 
