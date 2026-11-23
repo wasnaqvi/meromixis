@@ -164,6 +164,37 @@ class RunSpec:
 
 # ---- individual files --------------------------------------------------------------------
 
+def comments_on_own_lines(text: str) -> str:
+    """Move every trailing ``#`` comment onto its own line above its key.
+
+    IOIPSL's ``getin`` silently drops some keys that carry a trailing comment, and
+    whether it does depends on the length of the key: at r4609
+    ``virtual_theta_correction = .true.  # ...`` is read, while
+    ``moist_convection_inhibition = .true.  # ...`` on the very next line is not, and
+    the model falls back to the default with only a ``USING DEFAULTS`` line in the log
+    to say so.  That silently disabled the central switch of this project -- the
+    inhibited and non-inhibited runs came out bit-identical -- so no generated .def
+    file may carry a trailing comment on a key line.
+
+    Comments on their own lines are parsed correctly, so this keeps the provenance
+    annotations without risking the key.
+    """
+    out = []
+    for raw in text.splitlines():
+        line = raw.rstrip()
+        stripped = line.lstrip()
+        if not stripped or stripped.startswith("#") or "=" not in line:
+            out.append(line)
+            continue
+        i = line.find("#")
+        if i > 0:
+            out.append(line[i:].rstrip())
+            out.append(line[:i].rstrip())
+        else:
+            out.append(line)
+    return "\n".join(out) + "\n"
+
+
 def render_callphys(s: RunSpec) -> str:
     gen, leg = s.water_scheme == "generic", s.water_scheme == "legacy"
     star = {
@@ -495,7 +526,7 @@ def write_run_dir(s: RunSpec, root, account: str = "def-ncowan") -> Path:
     d = Path(root) / s.run_id
     d.mkdir(parents=True, exist_ok=True)
     files = {
-        "callphys.def": render_callphys(s),
+        "callphys.def": comments_on_own_lines(render_callphys(s)),
         "gases.def": render_gases(s),
         "traceur.def": render_traceur(s),
         "z2sig.def": render_z2sig(s),
@@ -504,7 +535,7 @@ def write_run_dir(s: RunSpec, root, account: str = "def-ncowan") -> Path:
         "job.slurm": render_slurm(s, account=account),
     }
     if s.one_d:
-        files["rcm1d.def"] = render_rcm1d(s)
+        files["rcm1d.def"] = comments_on_own_lines(render_rcm1d(s))
         # rcm1d still reads run.def, and aborts unless run_1d is set there.
         files["run.def"] = (
             "# 1-D run: rcm1d reads this as well as rcm1d.def\n"
@@ -514,7 +545,7 @@ def write_run_dir(s: RunSpec, root, account: str = "def-ncowan") -> Path:
             "INCLUDEDEF=rcm1d.def\n"
         )
     else:
-        files["run.def"] = render_run_def(s)
+        files["run.def"] = comments_on_own_lines(render_run_def(s))
     for name, text in files.items():
         (d / name).write_text(text)
     m = manifest(s)
