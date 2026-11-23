@@ -19,3 +19,6 @@ logs/
 
 # local copies of results write-ups; deliberately not tracked
 reports/
+
+# manuscript drafts; private, never pushed
+paper/
