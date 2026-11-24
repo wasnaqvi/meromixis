@@ -80,6 +80,9 @@ class RunSpec:
     water_scheme: str = "generic"  # "generic" (GCS route, has inhibition) | "legacy" | "dry"
     condensable_name: str = "H2O"  # tracer stem for the GCS route; see VERIFY P2
     inhibition: bool = True
+    # Inhibition switch of the emulator column the run starts from (initial_column);
+    # None follows ``inhibition``.  Set it to make on/off twins start identically.
+    init_inhibition: bool | None = None
     virtual_theta: bool = True
     mass_redistrib: bool = False
     clouds_radiative: bool = False
@@ -418,14 +421,20 @@ def initial_column(s: RunSpec) -> tuple[np.ndarray, np.ndarray, float, np.ndarra
     ~5e9 J m-2 K-1 against 0.35 W m-2 of internal heat, ~500 yr per kelvin.  So the
     column starts from the emulator's equilibrium for the same forcing, composition,
     inhibition switch and opacity law (constant kappa in graybody mode).
+
+    The inhibition switch of that column is ``s.init_inhibition`` when set.  Without
+    it, on/off twins start from different columns (8 K apart at the bottom), and the
+    model then holds the gap it was given: the first G1 and G3 twins measured their
+    initial conditions, not the switch.
     """
     from ..column import ColumnParams, solve_column
     from ..composition import x_to_q
 
+    init_inh = s.inhibition if s.init_inhibition is None else s.init_inhibition
     col = solve_column(ColumnParams(
         teq=s.teq, metallicity=s.metallicity, tint=s.tint, gravity=s.planet.gravity,
         kappa_th=s.kappa_ir, gamma_v=s.kappa_vi / s.kappa_ir,
-        kappa_pexp=0.0 if s.greybody else 1.0, inhibition=s.inhibition,
+        kappa_pexp=0.0 if s.greybody else 1.0, inhibition=init_inh,
         p_bot=max(1.0e8, 1.5 * s.p_bot),
     ))
     p_lay = s.p_bot * 10.0 ** (-pseudo_altitudes(s))  # sigma = exp(-z/H), H = 1/ln 10
@@ -497,7 +506,8 @@ psurf      = {s.p_bot:.1f}
 day0       = 0
 time       = 12
 day_step   = 48
-ndt        = {s.nday * 48}
+# ndt is in days: rcm1d multiplies it by day_step itself
+ndt        = {s.nday}
 diagfi_output_rate = {48 * 50}
 # 8: read T from the file "profile" (emulator equilibrium; see initial_column)
 ichoice    = 8

@@ -1,5 +1,6 @@
 """Run-directory generation for the Generic PCM."""
 import json
+from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
@@ -91,6 +92,18 @@ def test_write_run_directories(tmp_path):
     assert len(dirs) > len(load(CONFIG))  # 1-D twins included
 
 
+def test_init_inhibition_gives_twins_one_start(tmp_path):
+    """On/off twins with a shared init_inhibition start from the same column."""
+    base = replace(one_d_twin(RunSpec(teq=265.0, greybody=True)), nday=10)
+    on = write_run_dir(replace(base, run_id="on", inhibition=True, init_inhibition=False), tmp_path)
+    off = write_run_dir(replace(base, run_id="off", inhibition=False, init_inhibition=False), tmp_path)
+    old = write_run_dir(replace(base, run_id="old", inhibition=True), tmp_path)
+    assert (on / "profile").read_text() == (off / "profile").read_text()
+    assert (on / "profile").read_text() != (old / "profile").read_text()
+    assert "moist_convection_inhibition = .true." in (on / "callphys.def").read_text()
+    assert "moist_convection_inhibition = .false." in (off / "callphys.def").read_text()
+
+
 def test_cli_end_to_end(tmp_path, capsys):
     assert main(["column", "--teq", "255"]) == 0
     assert "cold trap" in capsys.readouterr().out
@@ -104,3 +117,9 @@ def test_cli_end_to_end(tmp_path, capsys):
     assert main(["monitor", str(syn), "--gravity", "12.43", "--metallicity", "100", "--intheat", "0.35"]) == 0
     assert main(["pcm-init", str(CONFIG), str(tmp_path / "runs"), "--no-1d"]) == 0
     assert yaml.safe_load(CONFIG.read_text())["fiducial"]["teq"] == 300
+
+
+def test_rcm1d_ndt_is_days(tmp_path):
+    """rcm1d multiplies ndt by day_step itself, so ndt must be nday, not steps."""
+    d = write_run_dir(replace(one_d_twin(RunSpec()), nday=19200), tmp_path)
+    assert "ndt        = 19200" in (d / "rcm1d.def").read_text()

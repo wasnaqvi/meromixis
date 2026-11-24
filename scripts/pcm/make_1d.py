@@ -17,6 +17,6 @@ out = Path("/scratch/" + os.environ.get("USER", "wasi") + "/pcm/runs")
 for tag, inhib in (("g1inh", True), ("g1noinh", False)):
     spec = replace(base, run_id=f"T265_Z100_{tag}", inhibition=inhib,
                    virtual_theta=inhib, tier="gate1d")
-    twin = replace(one_d_twin(spec), run_id=f"T265_Z100_{tag}_1d", nday=400)
+    twin = replace(one_d_twin(spec), run_id=f"T265_Z100_{tag}_1d", nday=19200)
     p = write_run_dir(twin, out, account=cfg["cluster"]["account"])
-    print("wrote", p, " inhibition =", inhib, " ndt =", twin.nday * 48)
+    print("wrote", p, " inhibition =", inhib, " ndt =", twin.nday)
