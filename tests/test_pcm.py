@@ -119,7 +119,72 @@ def test_cli_end_to_end(tmp_path, capsys):
     assert yaml.safe_load(CONFIG.read_text())["fiducial"]["teq"] == 300
 
 
+def test_power_law_table(tmp_path):
+    """kappa ~ p in Fortran order (T fastest, then p), constant elsewhere, in the model's units."""
+    from meromixis.pcm.greytable import kappa_to_cross_section, power_law_table, write_power_law_dir
+
+    k = power_law_table([-3.0, 0.0, 3.0, 6.0], n_t=3, n_q=2, n_band=4, n_g=5,
+                        kappa_th=1e-2, kappa_pexp=1.0, mugaz_ref=2.5)
+    assert k.shape == (3, 4, 2, 4, 5)
+    assert np.allclose(k[:, 2], kappa_to_cross_section(1e-2, 2.5))  # 1e3 mbar = 1 bar = p_ref
+    assert np.allclose(k[:, 3] / k[:, 2], 1e3) and np.ptp(k[:, 1]) == 0
+    flat = k.ravel(order="F")
+    assert flat[0] == flat[2] and flat[3] == pytest.approx(flat[0] * 1e3)  # T varies fastest
+
+    ax = tmp_path / "null_axes"
+    (ax / "20x25").mkdir(parents=True)
+    (ax / "T.dat").write_text("3\n100.\n200.\n300.\n")
+    (ax / "p.dat").write_text("4\n-3.0\n0.0\n3.0\n6.0\n")
+    (ax / "Q.dat").write_text("2\nH2_\nH2O\n2\n1e-4\n1e-2\n")
+    (ax / "g.dat").write_text("5\n.1\n.2\n.3\n.2\n.2\n")
+    (ax / "20x25" / "narrowbands_IR.in").write_text("4\n10. 500.\n500. 1000.\n1000. 2000.\n2000. 2800.\n")
+    # centres 2160, 2525, 2960, 3285, ...: the model treats the first three as infrared
+    (ax / "20x25" / "narrowbands_VI.in").write_text(
+        "6\n2020. 2300.\n2300. 2750.\n2750. 3170.\n3170. 3400.\n3400. 3700.\n3700. 4150.\n")
+    with pytest.raises(ValueError):
+        write_power_law_dir(ax, tmp_path / "null_bad", "20x25", 1e-2, 4e-3, 1.0, 2.5)
+    d = write_power_law_dir(ax, tmp_path / "greyp1", "20x25", 1e-2, 4e-3, 1.0, 2.5, t_axis=(100., 500., 1500.))
+    assert np.loadtxt(d / "20x25" / "corrk_gcm_IR.dat").size == 3 * 4 * 2 * 4 * 5
+    vi = np.loadtxt(d / "20x25" / "corrk_gcm_VI.dat").reshape((3, 4, 2, 6, 5), order="F")
+    # long-wave stellar bands carry kappa_IR's law, the rest kappa_VI's: ratio 0.4 at every p
+    assert np.allclose(vi[:, :, :, 3:] / vi[:, :, :, :1], 0.4)
+    assert (d / "p.dat").is_symlink() and (d / "T.dat").read_text().split()[-1] == "1500.0"
+
+
+def test_kappa_pexp_changes_start_and_floor(tmp_path):
+    base = replace(one_d_twin(RunSpec(teq=265.0, greybody=True)), nday=10)
+    a = write_run_dir(replace(base, run_id="k0"), tmp_path)
+    b = write_run_dir(replace(base, run_id="k1", kappa_pexp=1.0, corrkdir="greyp1_H2He_20x25"), tmp_path)
+    assert (a / "profile").read_text() != (b / "profile").read_text()
+    assert "kappa_IR   = 0.01" in (a / "callphys.def").read_text()
+    assert "kappa_IR   = 1.0e-12" in (b / "callphys.def").read_text()
+    assert "kappa_VI   = 1.0e-12" in (b / "callphys.def").read_text()
+    assert "dtdryadj" in (b / "diagfi.def").read_text() and "dtmoistadj" in (b / "diagfi.def").read_text()
+
+
+def test_reals_keep_a_decimal_point():
+    """IOIPSL reads 1e-12 as 1e-13; every exponent must carry a decimal point."""
+    from meromixis.pcm.deffiles import _real, check_reals
+
+    assert _real(1e-12) == "1.0e-12" and _real(0.004) == "0.004" and _real(2.5e-7) == "2.5e-07"
+    check_reals("ok.def", "kappa_IR   = 1.0e-12\n# 1e-12 in a comment is fine\n")
+    with pytest.raises(ValueError):
+        check_reals("bad.def", "kappa_IR   = 1e-12\n")
+
+
 def test_rcm1d_ndt_is_days(tmp_path):
     """rcm1d multiplies ndt by day_step itself, so ndt must be nday, not steps."""
     d = write_run_dir(replace(one_d_twin(RunSpec()), nday=19200), tmp_path)
     assert "ndt        = 19200" in (d / "rcm1d.def").read_text()
+
+
+def test_pcm_saturation_matches_the_condensable_table():
+    """Start columns use the PCM's own water curve; keep it in step with the table row."""
+    from meromixis.pcm.deffiles import PCM_H2O, pcm_saturation
+
+    row = (Path(__file__).resolve().parents[1] / "experiments/table_tracers_condensable.H2O").read_text()
+    line = next(ln for ln in row.splitlines() if ln.startswith("H2O "))
+    kv = dict(tok.split("=") for tok in line.split()[1:])
+    for k, v in PCM_H2O.items():
+        assert float(kv[k]) == v, k
+    assert pcm_saturation().psat_s(273.16) == pytest.approx(611.657)

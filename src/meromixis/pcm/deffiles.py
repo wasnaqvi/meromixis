@@ -15,6 +15,7 @@ text files the model reads, and writes a JSON manifest so each run is reproducib
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 
@@ -22,6 +23,7 @@ import numpy as np
 
 from ..composition import Composition, cp_molar
 from ..constants import AU, G_NEWTON, M_EARTH, MOLAR_MASS, R_EARTH, SIGMA_SB
+from .greytable import KAPPA_FLOOR
 
 
 def _b(flag: bool) -> str:
@@ -89,6 +91,9 @@ class RunSpec:
     greybody: bool = False
     kappa_ir: float = 1.0e-2
     kappa_vi: float = 4.0e-3
+    # Grey only: kappa_IR and kappa_VI ~ (p / 1 bar)**kappa_pexp.  Nonzero needs a corrk
+    # table that carries them (pcm.greytable); kappa_IR/kappa_VI are then floors.
+    kappa_pexp: float = 0.0
     corrkdir: str = "SET_ME_H2-He-H2Ovar"  # no public table has x_H2O > 1e-2 in H2/He
     bands: str = "38x36"
     datadir: str = "./datagcm"
@@ -166,6 +171,44 @@ class RunSpec:
 
 
 # ---- individual files --------------------------------------------------------------------
+
+
+# Water as the PCM sees it: constant-L Clausius-Clapeyron from the H2O row of
+# table_tracers_condensable (experiments/table_tracers_condensable.H2O).
+PCM_H2O = dict(delta_vapH=45038.2, Tref=273.16, Pref=611.657, mass=18.01528)
+
+
+def pcm_saturation():
+    """The PCM's own saturation curve, for start columns the model will find saturated.
+
+    The emulator default (Wagner-Pruss, real water) has psat ~20% below constant-L
+    Clausius-Clapeyron at 370 K, so a column it calls saturated is RH 0.8-0.99 to the
+    PCM, and moistadj_generic, which needs q > q_sat, never fires in it.
+    """
+    from ..thermo import Saturation
+
+    h = PCM_H2O
+    return Saturation("cc", latent_heat=h["delta_vapH"] / (h["mass"] / 1e3), t_ref=h["Tref"], p_ref=h["Pref"])
+
+
+def _real(x: float) -> str:
+    """A real for a .def file: ``1.0e-12``, never ``1e-12``.
+
+    IOIPSL's ``getin`` reads ``1e-12`` as 1e-13 (seen at r4609 on kappa_IR) while
+    ``1.0e-12`` is read correctly, so an exponent always gets a decimal point.
+    """
+    t = f"{x:.6g}"
+    return t.replace("e", ".0e", 1) if "e" in t and "." not in t else t
+
+
+_BAD_REAL = re.compile(r"^\s*\w+\s*=\s*[-+]?\d+[eE][-+]?\d+\s*$")
+
+
+def check_reals(name: str, text: str) -> None:
+    """Refuse a key line whose value is an exponent without a decimal point (see _real)."""
+    bad = [ln for ln in text.splitlines() if _BAD_REAL.match(ln)]
+    if bad:
+        raise ValueError(f"{name}: IOIPSL misreads these reals, write them with a decimal point: {bad}")
 
 def comments_on_own_lines(text: str) -> str:
     """Move every trailing ``#`` comment onto its own line above its key.
@@ -246,8 +289,8 @@ naerkind   = 1                      # [r4609] must match the model's own count
 callgasvis = .true.                 # [r4146]
 rayleigh   = .true.                 # [r4146]
 graybody   = {_b(s.greybody)}                # [deftank r596] double-grey gate test
-kappa_IR   = {s.kappa_ir:g}                  # [deftank r596] m2 kg-1, only if graybody
-kappa_VI   = {s.kappa_vi:g}                  # [deftank r596] m2 kg-1, only if graybody
+kappa_IR   = {_real(s.kappa_ir if s.kappa_pexp == 0 else KAPPA_FLOOR)}                  # [deftank r596] m2 kg-1, only if graybody; a floor when the corrk table carries kappa ~ p**{s.kappa_pexp:g}
+kappa_VI   = {_real(s.kappa_vi if s.kappa_pexp == 0 else KAPPA_FLOOR)}                  # [deftank r596] m2 kg-1, only if graybody
 specOLR    = .false.                # [wiki]
 meanOLR    = .false.                # [r4146]
 kastprof   = .false.                # [r4146]
@@ -400,13 +443,18 @@ def render_diagfi(s: RunSpec) -> str:
     two fields the lid diagnosis needs: the virtual potential temperature is the
     Ledoux criterion Leconte et al. (2024) recast in their Eq. 21, and the relative
     humidity settles whether the layer is sub-saturated without having to infer it.
+
+    ``dtdryadj`` and ``dtmoistadj`` are the adjustment heating rates.  They say directly
+    whether anything convects: in the constant-kappa gate runs neither adjustment ever
+    fired, so inhibition had nothing to switch off and the on/off twins were
+    bit-identical.
     """
     base = ["temperature", "teta", "vteta", "ps", "p", "u", "v", "w",
-            "ASR", "OLR", "ISR", "tsurf"]
+            "ASR", "OLR", "ISR", "tsurf", "dtdryadj"]
     if s.water_scheme == "generic":
-        base.append("RH_generic")
+        base += ["RH_generic", "dtmoistadj"]
     elif s.water_scheme == "legacy":
-        base.append("RH")
+        base += ["RH", "dtmoistadj"]
     return "\n".join(base + list(s.tracer_names)) + "\n"
 
 
@@ -434,7 +482,8 @@ def initial_column(s: RunSpec) -> tuple[np.ndarray, np.ndarray, float, np.ndarra
     col = solve_column(ColumnParams(
         teq=s.teq, metallicity=s.metallicity, tint=s.tint, gravity=s.planet.gravity,
         kappa_th=s.kappa_ir, gamma_v=s.kappa_vi / s.kappa_ir,
-        kappa_pexp=0.0 if s.greybody else 1.0, inhibition=init_inh,
+        kappa_pexp=s.kappa_pexp if s.greybody else 1.0, inhibition=init_inh,
+        saturation=pcm_saturation(),
         p_bot=max(1.0e8, 1.5 * s.p_bot),
     ))
     p_lay = s.p_bot * 10.0 ** (-pseudo_altitudes(s))  # sigma = exp(-z/H), H = 1/ln 10
@@ -648,6 +697,8 @@ def write_run_dir(s: RunSpec, root, account: str = "def-ncowan") -> Path:
             if s.water_scheme != "dry":
                 files[f"profile_{s.tracer_names[0]}"] = render_profile_vap(s)
     for name, text in files.items():
+        if name.endswith(".def"):
+            check_reals(name, text)
         (d / name).write_text(text)
     m = manifest(s)
     m["meromixis_version"] = __version__
